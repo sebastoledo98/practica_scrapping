@@ -1,10 +1,12 @@
 import asyncio
+import time
 import random
 import os
 import json
 from playwright_stealth import Stealth
 from playwright.async_api import async_playwright
-from utils import limpiar_texto
+from utils import limpiar_texto, guardar_comentarios_csv, guardar_procesados_csv
+from consulta_deepseek import analizar_comentarios
 
 SESSION_FILE = "session_twitter.json"
 CREDENTIALS_FILE = "credenciales.json"
@@ -13,7 +15,7 @@ CREDENTIALS_FILE = "credenciales.json"
 BROWSER_EXECUTABLE_PATH = None
 
 async def login_automatico(page):
-    print("INICIANDO LOGIN AUTOMÁTICO...")
+    print("[Twitter] INICIANDO LOGIN AUTOMÁTICO...")
 
     if not os.path.exists(CREDENTIALS_FILE):
         raise FileNotFoundError(f"Falta el archivo {CREDENTIALS_FILE}")
@@ -28,7 +30,7 @@ async def login_automatico(page):
     await asyncio.sleep(random.uniform(2, 4))
 
     # 1. Nombre de usuario
-    print("Escribiendo usuario...")
+    print("[Twitter] Escribiendo usuario...")
     user_input = page.locator('input[autocomplete="username"]')
     await user_input.wait_for()
     for char in user:
@@ -36,7 +38,7 @@ async def login_automatico(page):
     await page.keyboard.press("Enter")
 
     # 2. Contraseña (esperar a que aparezca tras el primer paso)
-    print("Escribiendo contraseña...")
+    print("[Twitter] Escribiendo contraseña...")
     pass_input = page.locator('input[name="password"]')
     await pass_input.wait_for()
     for char in pwd:
@@ -46,13 +48,13 @@ async def login_automatico(page):
     # Verificación de éxito (esperar al buscador o al timeline)
     try:
         await page.wait_for_selector('div[data-testid="primaryColumn"]', timeout=15000)
-        print("   > Login exitoso.")
+        print("[Twitter]    > Login exitoso.")
     except:
-        print("   > Warning: No se detectó la interfaz principal tras el login.")
+        print("[Twitter]    > Warning: No se detectó la interfaz principal tras el login.")
 
 async def cargar_sesion(browser):
     if os.path.exists(SESSION_FILE):
-        print(f"Detectado '{SESSION_FILE}'. Cargando sesión existente...")
+        print(f"[Twitter] Detectado '{SESSION_FILE}'. Cargando sesión existente...")
         #context = await browser.new_context(storage_state=SESSION_FILE)
         context = browser
         page = await context.new_page()
@@ -62,14 +64,14 @@ async def cargar_sesion(browser):
 
         # Si aparece el botón de login, la sesión caducó
         if await page.locator('a[href="/login"]').is_visible():
-            print("La sesión de X CADUCÓ. Reiniciando login...")
+            print("[Twitter] La sesión de X CADUCÓ. Reiniciando login...")
             await context.close()
             os.remove(SESSION_FILE)
             return await cargar_sesion(browser)
 
         return context, page
     else:
-        print(f"No existe '{SESSION_FILE}'. Iniciando Login...")
+        print(f"[Twitter] No existe '{SESSION_FILE}'. Iniciando Login...")
         context = await browser.new_context()
         page = await context.new_page()
         await login_automatico(page)
@@ -98,9 +100,9 @@ async def extraer_comentarios(page, cantidad_comentarios):
                 await asyncio.sleep(random.uniform(1.5, 3))
 
             textos = await lista_comentarios.all_inner_texts()
-            #print(f"Textos: {textos}")
+            #print(f"[Twitter] Textos: {textos}")
 
-            print(f"Extrayendo comentarios. Cantidad a extraer: {count}")
+            print(f"[Twitter] Extrayendo comentarios. Cantidad a extraer: {count}")
 
             textos = await lista_comentarios.all_inner_texts()
 
@@ -108,66 +110,77 @@ async def extraer_comentarios(page, cantidad_comentarios):
                 texto_limpio = limpiar_texto(texto.replace("\n", " ").strip())
                 palabras = texto_limpio.split()
                 if len(palabras) > 3:
-                    #print(f"Comentario extraido: {texto_limpio}")
+                    #print(f"[Twitter] Comentario extraido: {texto_limpio}")
                     if texto_limpio not in comentarios:
                         comentarios.append(texto_limpio)
 
-            print(f"Cantidad de comentarios extraidos: {len(comentarios)}")
+            print(f"[Twitter] Cantidad de comentarios extraidos: {len(comentarios)}")
             if len(comentarios) < cantidad_comentarios:
                 intentos += 1
-                print("Cargando mas comentarios")
+                print("[Twitter] Cargando mas comentarios")
     except Exception as e:
-        print(f"Error {e}")
+        print(f"[Twitter] Error {e}")
 
-    print(f"Comentarios: {comentarios}")
+    #print(f"[Twitter] Comentarios: {comentarios}")
     return comentarios
 
 
-async def scraping(page, tema, cantidad_posts):
-    print(f"BUSCANDO TEMA: '{tema}'")
+async def scraping(page, tema, cantidad_posts, cantidad_comentarios):
+    print(f"[Twitter] BUSCANDO TEMA: '{tema}'")
     comentarios = []
     try:
 # Búsqueda en tiempo real (Live) para obtener datos frescos
         search_url = f"https://x.com/search?q={tema}&src=typed_query"
         await page.goto(search_url)
         await asyncio.sleep(5)
-
-        # Localizar enlaces de tweets (/status/)
-        link_locators = page.locator('a[href*="/status/"]')
-
-        # Extraer los atributos href de forma segura
         urls = []
-        elementos_link = await link_locators.all()
-        for i in range(len(elementos_link)):
-            href = await elementos_link[i].get_attribute('href')
-            if href and "/status/" in href:
-                full_url = f"https://x.com{href}"
-                if full_url not in urls:
-                    urls.append(full_url)
-            if len(urls) >= cantidad_posts: break
+        intentos = 0
+        max_intentos = 5
 
-        print(f"Se encontraron {len(urls)} tweets para analizar.")
+        while len(urls) < cantidad_posts and intentos < max_intentos:
+
+            # Localizar enlaces de tweets (/status/)
+            link_locators = page.locator('a[href*="/status/"]')
+
+            # Extraer los atributos href de forma segura
+            elementos_link = await link_locators.all()
+            for elemento in elementos_link:
+                href = await elemento.get_attribute('href')
+                if href and "/status/" in href:
+                    blacklist = ["/analytics", "/likes", "/retweets", "/likes", "/photo"]
+                    if not any(word in href for word in blacklist):
+                        full_url = f"https://x.com{href}"
+                        if full_url not in urls:
+                            urls.append(full_url)
+                if len(urls) >= cantidad_posts: break
+
+            await page.mouse.wheel(0, 2000)
+            await asyncio.sleep(random.uniform(2, 4))
+
+            intentos += 1
+
+        print(f"[Twitter] Se encontraron {len(urls)} tweets para analizar.")
 
         for url in urls:
-            print(f" 🐦 Procesando tweet: {url}")
+            print(f"[Twitter] Procesando tweet: {url}")
             try:
                 await page.goto(url)
                 await asyncio.sleep(random.uniform(3, 5))
-                nuevos = await extraer_comentarios(page, 50)
+                nuevos = await extraer_comentarios(page, cantidad_comentarios)
                 comentarios.extend(nuevos)
             except Exception as e:
-                print(f" Error en tweet {url}: {e}")
+                print(f"[Twitter]  Error en tweet {url}: {e}")
                 continue
 
     except Exception as e:
-        print(f"Error general en el scraper de X: {e}")
+        print(f"[Twitter] Error general en el scraper de X: {e}")
         import traceback
         traceback.print_exc()
 
     return comentarios
 
 
-async def main():
+async def iniciar_scrapping(tema, n_posts, n_comentarios):
     async with Stealth().use_async(async_playwright()) as p:
         # Configuración del navegador
         launch_args = {
@@ -179,35 +192,26 @@ async def main():
         if BROWSER_EXECUTABLE_PATH:
             launch_args["executable_path"] = BROWSER_EXECUTABLE_PATH
 
+        tiempo_inicio_total = time.time()
+
         browser = await p.chromium.launch_persistent_context(**launch_args)
 
         # --- GESTIÓN DE SESIÓN INTELIGENTE ---
         context, page = await cargar_sesion(browser)
 
         # --- EJECUCIÓN DE LA TAREA ---
-        await scraping(page, "venezuela", 50)
+        comentarios = await scraping(page, tema, n_posts, n_comentarios)
+        print(f"[Twitter] Cantidad de comentarios extraidos: {len(comentarios)}")
+        #guardar_comentarios_csv(comentarios, tema, "Twitter")
+        resultado = analizar_comentarios(comentarios)
+        guardar_procesados_csv(resultado, tema, "Instagram")
 
         # Finalizar
         await asyncio.sleep(2)
         await browser.close()
 
-
-async def iniciar_scrapping():
-    async with async_playwright() as p:
-        # 'user_data' es la carpeta donde se guardará tu sesión
-        context = await p.chromium.launch_persistent_context(
-            './user_data',
-            headless=False, # Debe ser False para loguearte manualmente la primera vez
-            args=["--disable-blink-features=AutomationControlled"] # Oculta que es un bot
-        )
-
-        page = context.pages[0]
-        await page.goto('https://x.com/home')
-
-        # Si no estás logueado, el script esperará a que lo hagas manualmente
-        # Una vez logueado, las siguientes veces entrará directo.
-        await asyncio.sleep(60) # Tiempo para que hagas el login manual la primera vez
-        await context.close()
+        tiempo_fin_total = time.time()
+        print(f"[Twitter] Tiempo total de ejecucion: {tiempo_fin_total - tiempo_inicio_total:.2f}s")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(iniciar_scrapping("highguard", 53, 40))

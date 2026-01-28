@@ -1,9 +1,11 @@
 import asyncio
+import time
 import random
 import os
 import json
 from playwright.async_api import async_playwright
-from utils import limpiar_texto
+from utils import limpiar_texto, guardar_comentarios_csv, guardar_procesados_csv
+from consulta_gemini import process_instagram_gemini
 
 SESSION_FILE = "session_instagram.json"
 CREDENTIALS_FILE = "credenciales.json"
@@ -11,8 +13,9 @@ CREDENTIALS_FILE = "credenciales.json"
 # BROWSER_EXECUTABLE_PATH = '/usr/sbin/helium-browser' # O None para usar el default
 BROWSER_EXECUTABLE_PATH = None
 
+
 async def login_automatico(page):
-    print("INICIANDO LOGIN AUTOMÁTICO...")
+    print("[Instagram] INICIANDO LOGIN AUTOMÁTICO...")
 
     if not os.path.exists(CREDENTIALS_FILE):
         raise FileNotFoundError(f"Falta el archivo {CREDENTIALS_FILE}")
@@ -27,18 +30,18 @@ async def login_automatico(page):
     await asyncio.sleep(random.uniform(2, 4))
 
     # 3. Llenar formulario (Humanizado)
-    print("Escribiendo usuario...")
+    print("[Instagram] Escribiendo usuario...")
     for char in user:
         await page.locator.type(char, delay=random.randint(50, 150))
     await asyncio.sleep(random.uniform(0.5, 1.5))
 
-    print("Escribiendo contraseña...")
+    print("[Instagram] Escribiendo contraseña...")
     for char in pwd:
         await page.locator.type(char, delay=random.randint(50, 150))
     await asyncio.sleep(random.uniform(0.5, 1.5))
 
     # 4. Click en Login
-    print("   > Enviando formulario...")
+    print("[Instagram]    > Enviando formulario...")
     btn_login = page.locator('button[type="submit"]')
     await btn_login.click()
 
@@ -46,34 +49,35 @@ async def login_automatico(page):
     # Esperamos o bien ir al Home, o bien un mensaje de error
     try:
         await page.wait_for_url("https://www.instagram.com/", timeout=15000)
-        print("Login exitoso (URL Home detectada).")
+        print("[Instagram] Login exitoso (URL Home detectada).")
     except:
         # Si falla, miramos si hay texto de error
         if await page.locator("text=La contraseña es incorrecta").is_visible():
             raise Exception("Contraseña incorrecta en el JSON.")
-        print("   > Warning: No se detectó cambio de URL inmediato, verificando...")
+        print("[Instagram]    > Warning: No se detectó cambio de URL inmediato, verificando...")
 
     # 6. Manejar Pop-ups Post-Login
     # Instagram suele preguntar "Guardar información?" y "Activar notificaciones?"
     # Intentamos cerrar ambos.
     popups = ["Ahora no", "Not now", "Cancelar", "Cancel"]
 
-    for _ in range(2): # Intentamos un par de veces por si salen secuenciales
+    for _ in range(2):  # Intentamos un par de veces por si salen secuenciales
         await asyncio.sleep(3)
         for texto in popups:
             try:
                 btn = page.locator(f"button:has-text('{texto}')").first
                 if await btn.is_visible():
-                    print(f"   > Cerrando pop-up: '{texto}'")
+                    print(f"[Instagram]    > Cerrando pop-up: '{texto}'")
                     await btn.click()
                     await asyncio.sleep(1)
             except:
                 pass
 
+
 async def cargar_sesion(browser):
     # CASO 1: YA EXISTE SESIÓN
     if os.path.exists(SESSION_FILE):
-        print(f"Detectado '{SESSION_FILE}'. Cargando sesión existente...")
+        print(f"[Instagram] Detectado '{SESSION_FILE}'. Cargando sesión existente...")
         context = await browser.new_context(storage_state=SESSION_FILE)
         page = await context.new_page()
 
@@ -83,16 +87,17 @@ async def cargar_sesion(browser):
 
         # Si vemos el input de login, es que la cookie caducó
         if await page.locator('input[name="username"]').is_visible():
-            print("La sesión guardada CADUCÓ. Reiniciando proceso de login...")
+            print("[Instagram] La sesión guardada CADUCÓ. Reiniciando proceso de login...")
             await context.close()
-            os.remove(SESSION_FILE) # Borramos la sesión mala
-            return await cargar_sesion(browser) # Recursividad: intentamos de nuevo (irá al Caso 2)
+            os.remove(SESSION_FILE)  # Borramos la sesión mala
+            # Recursividad: intentamos de nuevo (irá al Caso 2)
+            return await cargar_sesion(browser)
 
         return context, page
 
     # CASO 2: NO EXISTE SESIÓN (HACER LOGIN)
     else:
-        print(f"No existe '{SESSION_FILE}'. Iniciando proceso de Login...")
+        print(f"[Instagram] No existe '{SESSION_FILE}'. Iniciando proceso de Login...")
         context = await browser.new_context()
         page = await context.new_page()
 
@@ -100,7 +105,7 @@ async def cargar_sesion(browser):
 
         # Guardar la cookie para el futuro
         await context.storage_state(path=SESSION_FILE)
-        print(f"Sesión guardada en '{SESSION_FILE}'.")
+        print(f"[Instagram] Sesión guardada en '{SESSION_FILE}'.")
 
         return context, page
 
@@ -109,7 +114,7 @@ async def extraer_comentarios(page, cantidad_comentarios):
     comentarios = []
     try:
         await page.wait_for_selector('main[role="main"]', timeout=15000)
-        await asyncio.sleep(2) # Pausa para asegurar carga de comentarios
+        await asyncio.sleep(2)  # Pausa para asegurar carga de comentarios
 
         xpath_filtro = (
             "//main[@role='main']//span[@dir='auto' "
@@ -117,7 +122,7 @@ async def extraer_comentarios(page, cantidad_comentarios):
             "and not(descendant::time) "
             "and not(ancestor::*[@role='button'])]"
         )
-        #lista_comentarios = page.locator(selector)
+        # lista_comentarios = page.locator(selector)
         lista_comentarios = page.locator(f"xpath={xpath_filtro}")
 
         intentos = 0
@@ -130,9 +135,9 @@ async def extraer_comentarios(page, cantidad_comentarios):
                 await asyncio.sleep(random.uniform(1.5, 3))
 
             textos = await lista_comentarios.all_inner_texts()
-            #print(f"Textos: {textos}")
+            # print(f"[Instagram] Textos: {textos}")
 
-            print(f"Extrayendo comentarios. Cantidad a extraer: {count}")
+            print(f"[Instagram] Extrayendo comentarios. Cantidad a extraer: {count}")
 
             textos = await lista_comentarios.all_inner_texts()
 
@@ -143,24 +148,26 @@ async def extraer_comentarios(page, cantidad_comentarios):
                 texto_limpio = limpiar_texto(texto_limpio)
                 palabras = texto_limpio.split()
                 if len(palabras) > 3:
-                    #print(f"Comentario extraido: {texto_limpio}")
+                    # print(f"[Instagram] Comentario extraido: {texto_limpio}")
                     if texto_limpio not in comentarios:
                         comentarios.append(texto_limpio)
 
-            print(f"Cantidad de comentarios extraidos: {len(comentarios)}")
+            print(f"[Instagram] Cantidad de comentarios extraidos: {len(comentarios)}")
             if len(comentarios) < cantidad_comentarios:
                 intentos += 1
-                print("Cargando mas comentarios")
+                print("[Instagram] Cargando mas comentarios")
     except Exception as e:
-        print(f"Error {e}")
+        print(f"[Instagram] Error {e}")
+        print("[Instagram] No se encontraron comentarios")
+        return comentarios
 
-    print(f"Comentarios: {comentarios}")
+    #print(f"[Instagram] Comentarios: {comentarios}")
     return comentarios
 
 
-async def scraping(page, tema, cantidad_posts):
-    print(f"BUSCANDO TEMA: '{tema}'")
-    comentarios = []
+async def scraping(page, tema, cantidad_posts, cantidad_comentarios):
+    print(f"[Instagram] BUSCANDO TEMA: '{tema}'")
+    comentarios_total = []
     try:
         await page.goto(f"https://www.instagram.com/explore/search/keyword/?q={tema}")
         await asyncio.sleep(5)
@@ -173,37 +180,41 @@ async def scraping(page, tema, cantidad_posts):
             href = await links_posts[i].get_attribute('href')
             urls.append(f"https://www.instagram.com{href}")
 
-        print(f"Se encontraon {len(urls)} posts para revisar")
+        print(f"[Instagram] Se econtraron {len(urls)} posts para revisar")
 
         for url in urls:
-            print(f" Procesando post: {url}")
+            print(f"[Instagram]  Procesando post: {url}")
             try:
                 await page.goto(url)
                 await asyncio.sleep(random.uniform(3, 6))
 
-                comentarios = await extraer_comentarios(page, 50)
+                comentarios = await extraer_comentarios(page, cantidad_comentarios)
+                comentarios_total.extend(comentarios)
             except Exception as e:
-                print(f" Error al acceder al post {url}: {e}")
+                print(f"[Instagram]  Error al acceder al post {url}: {e}")
                 continue
     except Exception as e:
-        print(f"Error en scraping: {e}")
+        print(f"[Instagram] Error en scraping: {e}")
         # Importante para debuggear: ver dónde falló
         import traceback
         traceback.print_exc()
 
-    return comentarios
+    return comentarios_total
 
 
-async def iniciar_scrapping():
+async def iniciar_scrapping(tema, n_posts, n_comentarios):
     async with async_playwright() as p:
         # Configuración del navegador
         launch_args = {
             "headless": False,
-            "args": ["--disable-notifications"] # Bloquea notificaciones nativas
+            # Bloquea notificaciones nativas
+            "args": ["--disable-notifications"]
         }
 
         if BROWSER_EXECUTABLE_PATH:
             launch_args["executable_path"] = BROWSER_EXECUTABLE_PATH
+
+        tiempo_inicio_total = time.time()
 
         browser = await p.chromium.launch(**launch_args)
 
@@ -211,11 +222,19 @@ async def iniciar_scrapping():
         context, page = await cargar_sesion(browser)
 
         # --- EJECUCIÓN DE LA TAREA ---
-        await scraping(page, "venezuela", 50)
+        comentarios = await scraping(page, tema, n_posts, n_comentarios)
+        print(f"[Instagram] Cantidad de comentarios extraidos: {len(comentarios)}")
+        #guardar_comentarios_csv(comentarios, tema, "Instagram")
+        resultado = process_instagram_gemini(comentarios)
+        guardar_procesados_csv(resultado['result'], tema, "Instagram")
+
 
         # Finalizar
         await asyncio.sleep(2)
         await browser.close()
 
+        tiempo_fin_total = time.time()
+        print(f"[Instagram] Tiempo total de ejecucion: {tiempo_fin_total - tiempo_inicio_total:.2f}s")
+
 if __name__ == "__main__":
-    asyncio.run(iniciar_scrapping())
+    asyncio.run(iniciar_scrapping("venezuela", 2, 10))

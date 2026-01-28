@@ -23,40 +23,50 @@ def limpiar_texto(texto):
 
     return texto
 
-def guardar_comentarios_csv(lista_comentarios, tema, red_social):
-    """
-    Guarda los datos en un CSV y mide el tiempo del proceso.
-    """
+def guardar_procesados_csv(lista_comentarios, tema, red_social):
     inicio_guardado = time.time()
-    nombre_archivo = f"dataset_{tema.replace(' ', '_')}.csv"
+    red_social = red_social.lower()
+    nombre_archivo = f"{red_social}_procesados.csv"
 
-    # Definimos si el archivo es nuevo para escribir la cabecera
-    file_exists = os.path.isfile(nombre_archivo)
-
-    print(f"💾 Guardando {len(lista_comentarios)} registros en {nombre_archivo}...")
+    print(f"[{red_social}] Guardando {len(lista_comentarios)} registros en {nombre_archivo}...")
 
     try:
         # Usamos utf-8-sig para que Excel en Windows reconozca las tildes correctamente
-        with open(nombre_archivo, mode='a', newline='', encoding='utf-8-sig') as file:
+        with open(nombre_archivo, mode='w', newline='', encoding='utf-8-sig') as file:
             writer = csv.writer(file)
-
-            # Cabecera (solo si el archivo es nuevo)
-            if not file_exists:
-                writer.writerow(['Fecha_Extraccion', 'Red_Social', 'Tema', 'Texto_Original', 'Texto_Limpio'])
+            writer.writerow(['Comentario', 'Sentimiento', 'Explicación'])
 
             for comentario in lista_comentarios:
-
-                # Solo guardamos si el texto limpio no quedó vacío tras el proceso
-                if len(comentario) > 2:
-                    writer.writerow([
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        red_social,
-                        tema,
-                        comentario,
-                    ])
+                writer.writerow([
+                    comentario
+                ])
 
         fin_guardado = time.time()
-        print(f"✅ Proceso de guardado y limpieza finalizado en {fin_guardado - inicio_guardado:.4f} segundos.")
+        print(f"[{red_social}] Se guardaron los resultados en {fin_guardado - inicio_guardado:.4f} segundos.")
 
     except Exception as e:
-        print(f"❌ Error al escribir el CSV: {e}")
+        print(f"[{red_social}] Error al escribir el CSV: {e}")
+
+
+def guardar_comentarios_csv(lista_comentarios, tema, red_social):
+    inicio_guardado = time.time()
+    red_social = red_social.lower()
+    nombre_archivo = f"{red_social}_comentarios.csv"
+
+    print(f"[{red_social}] Guardando {len(lista_comentarios)} registros en {nombre_archivo}...")
+
+    try:
+        # Usamos utf-8-sig para que Excel en Windows reconozca las tildes correctamente
+        with open(nombre_archivo, mode='w', newline='', encoding='utf-8-sig') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Comentario'])
+
+            writer.writerow([
+                lista_comentarios
+            ])
+
+        fin_guardado = time.time()
+        print(f"[{red_social}] Proceso de guardado y limpieza finalizado en {fin_guardado - inicio_guardado:.4f} segundos.")
+
+    except Exception as e:
+        print(f"[{red_social}] Error al escribir el CSV: {e}")
