@@ -1,14 +1,15 @@
 import asyncio
-import random
+#import random
 import time
 
 # Importamos las funciones principales de cada uno de tus archivos
 # Asumiendo que en cada archivo renombraste 'async def main():' por 'async def iniciar_scrapping(...):'
-from scrap_instagram import iniciar_scrapping as ig_scraper
-from scrap_twitter import iniciar_scrapping as tw_scraper
-from scrap_facebook import iniciar_scrapping as fb_scraper
-from scrap_linkedin import iniciar_scrapping as li_scraper
-from procesamiento_nlp import procesamiento_nlp
+from scrapers.scrap_instagram import iniciar_scrapping as ig_scraper
+from scrapers.scrap_twitter import iniciar_scrapping as tw_scraper
+from scrapers.scrap_facebook import iniciar_scrapping as fb_scraper
+from scrapers.scrap_linkedin import iniciar_scrapping as li_scraper
+#from procesamiento_nlp import procesamiento_nlp
+from utils import generar_graficos
 
 async def ejecutar_con_metricas(nombre_red, funcion_scraper, tema):
     """
@@ -57,40 +58,21 @@ async def orquestador_principal(tema_busqueda):
     reportes = await asyncio.gather(*tareas)
 
     tiempo_fin_total = time.time()
-    total_comentarios = sum(len(r["datos"]) for r in reportes)
+    #total_comentarios = sum(len(r["datos"]) for r in reportes)
 
-    print("\n" + "—"*58)
+    print("\n" + "—"*60)
     print(f"RESUMEN DE LA PRÁCTICA (COMPUTACIÓN PARALELA)")
     print(f"Tiempo total de orquestación: {tiempo_fin_total - tiempo_inicio_total:.2f}s")
     print("—"*60)
 
-# Orquestador Asíncrono
-async def orquestar_procesamiento():
-    # Definición de las redes sociales y sus archivos correspondientes
-    tareas_redes = [
-        ("instagram_comentarios.csv", "Instagram"),
-        ("twitter_comentarios.csv", "Twitter/X"),
-        ("facebook_comentarios.csv", "Facebook"),
-        ("linkedin_comentarios.csv", "LinkedIn")
-    ]
-
-    inicio_total = time.time()
-
-    # Creamos tareas concurrentes usando to_thread para no bloquear el event loop
-    tareas = [
-        asyncio.to_thread(procesamiento_nlp, archivo, nombre)
-        for archivo, nombre in tareas_redes
-    ]
-
-    # Ejecución concurrente
-    resultados = await asyncio.gather(*tareas)
-
-    fin_total = time.time()
-    print(f"\n===== TIEMPO TOTAL CONCURRENTE: {fin_total - inicio_total:.2f}s =====") [cite: 47]
-
 
 if __name__ == "__main__":
     # Tema de interés para tu Práctica 6
+    #TEMA = "nicolas muñoz"
     TEMA = "venezuela"
     asyncio.run(orquestador_principal(TEMA))
-    asyncio.run(orquestar_procesamiento())
+
+    #generar_graficos("LinkedIn", "linkedin_procesados.csv")
+    #generar_graficos("Instagram", "instagram_procesados.csv")
+    #generar_graficos("Twitter", "twitter_procesados.csv")
+    #generar_graficos("Facebook", "facebook_procesados.csv")

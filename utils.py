@@ -1,9 +1,9 @@
 import re
-import os
-from datetime import datetime
 import csv
 import time
 import emoji
+import pandas as pd
+import matplotlib.pyplot as plt
 
 def limpiar_texto(texto):
     # 1. Convertir a minúsculas
@@ -26,7 +26,7 @@ def limpiar_texto(texto):
 def guardar_procesados_csv(lista_comentarios, tema, red_social):
     inicio_guardado = time.time()
     red_social = red_social.lower()
-    nombre_archivo = f"{red_social}_procesados.csv"
+    nombre_archivo = f"procesados/{red_social}_procesados.csv"
 
     print(f"[{red_social}] Guardando {len(lista_comentarios)} registros en {nombre_archivo}...")
 
@@ -36,10 +36,9 @@ def guardar_procesados_csv(lista_comentarios, tema, red_social):
             writer = csv.writer(file)
             writer.writerow(['Comentario', 'Sentimiento', 'Explicación'])
 
-            for comentario in lista_comentarios:
-                writer.writerow([
-                    comentario
-                ])
+            writer.writerow([
+                lista_comentarios
+            ])
 
         fin_guardado = time.time()
         print(f"[{red_social}] Se guardaron los resultados en {fin_guardado - inicio_guardado:.4f} segundos.")
@@ -51,22 +50,76 @@ def guardar_procesados_csv(lista_comentarios, tema, red_social):
 def guardar_comentarios_csv(lista_comentarios, tema, red_social):
     inicio_guardado = time.time()
     red_social = red_social.lower()
-    nombre_archivo = f"{red_social}_comentarios.csv"
+    nombre_archivo = f"comentarios/{red_social}_comentarios.csv"
 
     print(f"[{red_social}] Guardando {len(lista_comentarios)} registros en {nombre_archivo}...")
 
     try:
         # Usamos utf-8-sig para que Excel en Windows reconozca las tildes correctamente
         with open(nombre_archivo, mode='w', newline='', encoding='utf-8-sig') as file:
-            writer = csv.writer(file)
+            writer = csv.writer(file, delimiter=',', quoting=csv.QUOTE_ALL)
             writer.writerow(['Comentario'])
 
-            writer.writerow([
-                lista_comentarios
-            ])
+            for comentario in lista_comentarios:
+                comentario = "'" + comentario + "'"
+                writer.writerow([comentario])
 
         fin_guardado = time.time()
         print(f"[{red_social}] Proceso de guardado y limpieza finalizado en {fin_guardado - inicio_guardado:.4f} segundos.")
 
     except Exception as e:
         print(f"[{red_social}] Error al escribir el CSV: {e}")
+
+def guardar_metricas(tiempo, total_comentarios, tiempo_modelo, red_social):
+    red_social = red_social.lower()
+    nombre_archivo = f"metricas/{red_social}_metricas.csv"
+
+    print(f"[{red_social}] Guardando metricas en {nombre_archivo}...")
+
+    try:
+        # Usamos utf-8-sig para que Excel en Windows reconozca las tildes correctamente
+        with open(nombre_archivo, mode='w', newline='', encoding='utf-8-sig') as file:
+            writer = csv.writer(file, delimiter=',', quoting=csv.QUOTE_ALL)
+            writer.writerow(['Tiempo', 'Cantidad Comentarios', 'Tiempo Analisis'])
+            writer.writerow([tiempo, total_comentarios, tiempo_modelo])
+
+        print(f"[{red_social}] Metricas guardadas.")
+
+    except Exception as e:
+        print(f"[{red_social}] Error al escribir el CSV: {e}")
+
+def generar_graficos(red_social, archivo_datos):
+    # 1. Cargar y procesar los datos
+    # Nota: He procesado la cadena de texto original para convertirla en un DataFrame limpio
+    df = pd.read_csv(archivo_datos)
+
+    df.head(10)
+
+    #df = pd.DataFrame(datos)
+
+    # Guardar los datos limpios en un CSV
+    df.to_csv('analisis_sentimientos.csv', index=False)
+
+    # 2. Contar la frecuencia de cada sentimiento
+    sentiment_counts = df['Sentimiento'].value_counts().sort_values(ascending=False)
+
+    # 3. Generar Gráfico de Barras
+    plt.figure(figsize=(10, 6))
+    sentiment_counts.plot(kind='bar', color=['skyblue', 'lightgrey', 'salmon'])
+    plt.title('Distribución de Sentimientos en los Comentarios')
+    plt.xlabel('Sentimiento')
+    plt.ylabel('Cantidad de Comentarios')
+    plt.xticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig(f'grafico_barras_sentimientos_{red_social}.png')
+    plt.close()
+
+    # 4. Generar Gráfico de Pastel
+    plt.figure(figsize=(8, 8))
+    sentiment_counts.plot(kind='pie', autopct='%1.1f%%', startangle=140, colors=['skyblue', 'lightgrey', 'salmon'])
+    plt.title('Proporción de Sentimientos')
+    plt.ylabel('')
+    plt.tight_layout()
+    plt.savefig(f'grafico_pastel_sentimientos_{red_social}.png')
+    plt.close()
+
