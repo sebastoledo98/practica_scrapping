@@ -5,33 +5,36 @@ from openai import AsyncOpenAI
 
 with open("api_keys_modelos.json", 'r') as f:
     creds = json.load(f)
-    api_key = creds['openrouter']['api-key']
+    api_key = creds['deepseek']['api-key']
 
 
 # Configuración de OpenRouter
 # Asegúrate de tener tu API Key en las variables de entorno o cámbiala aquí
 client = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1",
+    base_url="https://api.deepseek.com",
     api_key=api_key,
 )
+
+MODEL = "deepseek-chat"
 
 async def generar_storytelling(df, tema_query):
     """Envía un resumen de sentimientos a DeepSeek para obtener una conclusión."""
     if client is None or df.empty:
         return "Storytelling no disponible (falta conexión a API o datos)."
 
-    print(f"--- Generando storytelling con openai/gpt-oss-120b ---")
+    print(f"--- Generando storytelling con {MODEL} ---")
 
     resumen = df['sentimiento'].value_counts().to_dict()
     prompt = f"Analiza estos resultados de sentimiento sobre el tema '{tema_query}': {resumen}. Dame una conclusión breve, analítica y profesional sobre la opinión pública."
 
     try:
         response = await client.chat.completions.create(
-            model="deepseek/deepseek-r1-0528:free",
+            model=MODEL,
             messages=[
+                {"role": "system", "content": "No generes el razonamiento, solo genera el resultado"},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7
+            stream=False
         )
 
         resultado = response.choices[0].message.content
@@ -46,21 +49,24 @@ async def generar_storytelling(df, tema_query):
 
 async def procesar_sentimientos(data, batch_size, red_social, semaphore):
     resultados_totales = []
+    resultado = ""
     for i in range(0, len(data), batch_size):
         batch = data[i:i + batch_size]
         print(f"[{red_social}] Procesando batch {i//batch_size + 1} de {len(data)//batch_size + 1}...")
 
         async with semaphore:
             resultado_batch = await analizar_comentarios(batch, red_social)
-            resultados_totales.append(resultado_batch)
+            resultado += resultado_batch
+            #resultados_totales.append(resultado_batch)
 
         # Pequeña pausa para evitar bloqueos por Rate Limit de la API gratuita
             await asyncio.sleep(3)
+    resultados_totales = resultado.splitlines()
     return resultados_totales
 
 
 async def analizar_comentarios(comentarios, red_social):
-    print(f"--- [{red_social}] Analizando con openai/gpt-oss-120b ---")
+    print(f"--- [{red_social}] Analizando con {MODEL} ---")
 
     prompt = (
         "Analiza la siguiente lista de comentarios extraídos de Instagram. "
@@ -73,10 +79,13 @@ async def analizar_comentarios(comentarios, red_social):
 
     try:
         response = await client.chat.completions.create(
-            model="deepseek/deepseek-r1-0528:free",
+            model=MODEL,
             messages=[
+
+                {"role": "system", "content": "No generes el razonamiento, solo genera el resultado"},
                 {"role": "user", "content": prompt}
-            ]
+            ],
+            stream=False
         )
 
         resultado = response.choices[0].message.content
@@ -208,4 +217,4 @@ if __name__ == "__main__":
         # ... el resto de tu lista
     ]
 
-    asyncio.run(procesar_sentimientos(comentarios_extraidos, 10))
+    asyncio.run(procesar_sentimientos(comentarios_extraidos, 20, "Twitter"))

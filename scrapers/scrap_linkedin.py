@@ -5,8 +5,9 @@ import os
 import json
 import re
 from playwright.async_api import async_playwright
-from utils import limpiar_texto, guardar_comentarios_csv, guardar_procesados_csv
+from utils import limpiar_texto, guardar_comentarios_csv, guardar_procesados_csv, guardar_metricas
 from modelos.consulta_oss import procesar_sentimientos
+from conexion_bases import guardar_comentarios, guardar_posts, guardar_metricas as metricasbd
 
 # --- CONFIGURACIÓN ---
 SESSION_FILE = "sesiones/session_linkedin.json"
@@ -167,7 +168,7 @@ async def extraer_comentarios_post(page, cantidad_objetivo):
 async def tarea_scraping(page, tema, cantidad_posts, cantidad_comentarios):
     print(f"[LinkedIn] BUSCANDO EN LINKEDIN: '{tema}'")
     comentarios_totales = []
-
+    max_comentarios = cantidad_comentarios * cantidad_posts
     try:
         # 1. Búsqueda
         url_busqueda = f"https://www.linkedin.com/search/results/content/?keywords={
@@ -260,15 +261,19 @@ async def tarea_scraping(page, tema, cantidad_posts, cantidad_comentarios):
         print(f"[LinkedIn] Total posts válidos: {len(lista_urls)}")
 
         # 3. Visita y Extracción
+        i = 1
         for url in lista_urls:
-            print(f"[LinkedIn] Procesando: {url}")
+            print(f"[LinkedIn] Procesando post: {url}, post {i}/{len(lista_urls)}")
             try:
+                i += 1
                 await page.goto(url)
                 await asyncio.sleep(random.uniform(3, 5))
                 nuevos = await extraer_comentarios_post(page, cantidad_comentarios)
-                print(f"[LinkedIn] Comentarios extraidos del post: {
-                      len(nuevos)}")
-                comentarios_totales.extend(nuevos)
+                post = [url, nuevos]
+                print(f"[LinkedIn] Comentarios extraidos del post: {len(nuevos)}")
+                comentarios_totales.append(post)
+                if len(comentarios_totales) >= max_comentarios:
+                    break
             except Exception as e:
                 print(f"[LinkedIn] Error navegando: {e}")
 
@@ -279,7 +284,7 @@ async def tarea_scraping(page, tema, cantidad_posts, cantidad_comentarios):
 
 
 # --- ENTRADA PARA ORQUESTADOR ---
-async def iniciar_scrapping(tema, cantidad_posts, cantidad_comentarios):
+async def iniciar_scrapping(tema, cantidad_posts, cantidad_comentarios, id):
     async with async_playwright() as p:
         launch_args = {"headless": False, "args": ["--disable-notifications"]}
         if BROWSER_EXECUTABLE_PATH:
@@ -295,6 +300,7 @@ async def iniciar_scrapping(tema, cantidad_posts, cantidad_comentarios):
             await login_automatico(page)
             await context.storage_state(path=SESSION_FILE)
 
+        print("--- [LinkedIn] Extrayendo comentarios ---")
         comentarios = await tarea_scraping(page, tema, cantidad_posts, cantidad_comentarios)
 
         tiempo_fin = time.time()
@@ -306,16 +312,23 @@ async def iniciar_scrapping(tema, cantidad_posts, cantidad_comentarios):
         await asyncio.sleep(2)
         await browser.close()
 
-        guardar_comentarios_csv(comentarios, tema, "LinkedIn")
+        print("--- [LinkedIn] Guardando comentarios ---")
+        #guardar_comentarios_csv(comentarios, tema, "LinkedIn")
+        #await guardar_comentarios(comentarios, tema, "LinkedIn")
+        await guardar_posts(comentarios, tema, "LinkedIn")
 
-        tiempo_inicio = time.time()
-        resultado = await procesar_sentimientos(comentarios, 20, "LinkedIn")
-        tiempo_fin = time.time()
-        tiempo_total_modelo = tiempo_fin - tiempo_inicio
+        #tiempo_inicio = time.time()
+        #print("--- [LinkedIn] Analizando comentarios ---")
+        #resultado = await procesar_sentimientos(comentarios, 20, "LinkedIn")
+        #tiempo_fin = time.time()
+        #tiempo_total_modelo = tiempo_fin - tiempo_inicio
 
-        guardar_procesados_csv(resultado, tema, "LinkedIn")
-        guardar_metricas(tiempo_total_scraping, len(comentarios), tiempo_total_modelo, "LinkedIn")
+        #print("--- [LinkedIn] Guardando analisis ---")
+        #guardar_procesados_csv(resultado, tema, "LinkedIn")
 
+        print("--- [LinkedIn] Guardando metricas ---")
+        #guardar_metricas(tiempo_total_scraping, len(comentarios), tiempo_total_modelo, "LinkedIn")
+        await metricasbd(id, tiempo_total_scraping, len(comentarios), "LinkedIn", tema)
 
 if __name__ == "__main__":
     asyncio.run(iniciar_scrapping("venezuela", 3, 10))

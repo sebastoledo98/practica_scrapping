@@ -7,6 +7,7 @@ import json
 from playwright.async_api import async_playwright
 from utils import limpiar_texto, guardar_comentarios_csv, guardar_procesados_csv, guardar_metricas
 from modelos.consulta_oss import procesar_sentimientos
+from conexion_bases import guardar_comentarios, guardar_posts, guardar_metricas as metricasbd
 
 SESSION_FILE = "sesiones/session_facebook.json"
 CREDENTIALS_FILE = "credenciales.json"
@@ -87,37 +88,36 @@ async def extraer_comentarios(page, cantidad_comentarios):
     try:
         xpath_comentarios = "//div[@dir='auto']"
         intentos = 0
+        cantidad_anterior = 0
         han_empezado_comentarios = False
 
-        while len(comentarios) < cantidad_comentarios and intentos < 5:
-            await page.mouse.wheel(0, 1500)
+        while len(comentarios) < cantidad_comentarios and intentos < 3:
+            await page.mouse.wheel(0, 2000)
             await asyncio.sleep(2)
 
             elementos = page.locator(xpath_comentarios)
             count = await elementos.count()
 
+            # Verificación de progreso para el bucle
+            if count == cantidad_anterior:
+                intentos += 1
+            else:
+                intentos = 0
+            cantidad_anterior = count
+
             for i in range(count):
                 raw_texto = await elementos.nth(i).inner_text()
-
-                # 1. Limpiar caracteres raros y espacios
                 texto_limpio = regex_raros.sub('', raw_texto).strip()
                 texto_limpio = limpiar_texto(texto_limpio.replace("\n", " "))
-
-                #print(f"Texto limpio {texto_limpio}")
 
                 if not texto_limpio:
                     continue
 
-                # 2. Detectar el inicio real de los comentarios
-                # Si encontramos "Más pertinentes", lo que sigue son nombres y comentarios
                 if not han_empezado_comentarios:
                     if any(m in texto_limpio.lower() for m in marcadores_inicio):
                         han_empezado_comentarios = True
-                    continue # Seguimos saltando hasta encontrar el marcador
+                    continue
 
-                # 3. Filtrar metadatos de los comentarios (Nombres, Horas, Botones)
-                # Un comentario real suele ser largo. Los nombres suelen ser cortos o estar solos.
-                # También filtramos el texto de "respuestas anteriores"
                 texto_lower = texto_limpio.lower()
                 es_basura = any(x in texto_lower for x in [
                     "responder", "compartir",
@@ -126,33 +126,40 @@ async def extraer_comentarios(page, cantidad_comentarios):
                 ])
 
                 if han_empezado_comentarios and not es_basura:
-                    # Validamos longitud para evitar que el nombre del usuario se guarde como comentario
                     if len(texto_limpio.split()) > 3 and texto_limpio not in comentarios:
                         comentarios.append(texto_limpio)
+                        if len(comentarios) >= cantidad_comentarios:
+                            break
 
-                if len(comentarios) >= cantidad_comentarios: break
-
-            intentos += 1
+            if len(comentarios) < cantidad_comentarios:
+                print(f"[Facebook] Cargando más comentarios... ({len(comentarios)}/{cantidad_comentarios})")
 
     except Exception as e:
         print(f"[Facebook] Error extrayendo: {e}")
 
     return comentarios
 
+
 async def scraping(page, tema, cantidad_posts, cantidad_comentarios):
     print(f"[Facebook] Buscando: '{tema}'")
     comentarios_totales = []
     ids_procesados = set()
+    # MODIFICACIÓN: Mínimo requerido más 5 de margen
+    objetivo_posts = cantidad_posts + 5
 
     #search_url = f"https://m.facebook.com/search/posts/?q={tema}"
     search_url = f"https://m.facebook.com/search_results/?q={tema}"
     await page.goto(search_url)
     await asyncio.sleep(5)
 
-    while len(ids_procesados) < cantidad_posts:
+    intentos_scrolling = 0
+    max_comentarios = cantidad_comentarios*cantidad_posts
+    while len(ids_procesados) < objetivo_posts and intentos_scrolling < 3:
         # Localizar los contenedores que identificaste
         contenedores = await page.locator('div[data-tracking-duration-id]').all()
+        encontrados = 0
 
+        i = 1
         for post in contenedores:
             if len(ids_procesados) >= cantidad_posts: break
 
@@ -165,15 +172,23 @@ async def scraping(page, tema, cantidad_posts, cantidad_comentarios):
 
                 if await trigger.is_visible():
                     print(f"[Facebook] Abriendo post ID: {post_id}")
+                    print(f"[Facebook] Procesando post: {i}/{len(contenedores)}")
                     await trigger.click()
                     await asyncio.sleep(3) # Esperar carga del post
 
+                    url_post = page.url
+                    print(f"[Facebook] Url del Post: {url_post}")
+
                     # Extraer comentarios usando tu función
                     coms = await extraer_comentarios(page, cantidad_comentarios)
-                    print(f"Comentarios extraidos: {coms}")
-                    comentarios_totales.extend(coms)
-
+                    #print(f"Comentarios extraidos: {coms}")
+                    post = [url_post, coms]
+                    comentarios_totales.append(post)
+                    print(f"[Facebook] Post procesado. Acumulados: {len(comentarios_totales)} comentarios.")
+                    if len(comentarios_totales) >= max_comentarios:
+                        return comentarios_totales
                     ids_procesados.add(post_id)
+                    encontrados += 1
 
                     # Volver a la lista de búsqueda
                     await page.go_back()
@@ -183,14 +198,19 @@ async def scraping(page, tema, cantidad_posts, cantidad_comentarios):
                     break
             except Exception as e:
                 print(f"[Facebook] Error en post {post_id}: {e}")
+                ids_procesados.add(post_id)
 
         # Scroll en la lista de búsqueda si necesitamos más posts
-        await page.mouse.wheel(0, 1500)
-        await asyncio.sleep(2)
-
+        if encontrados == 0:
+            await page.mouse.wheel(0, 2000)
+            await asyncio.sleep(3)
+            intentos_scrolling += 1
+        else:
+            intentos_scrolling = 0
     return comentarios_totales
 
-async def iniciar_scrapping(tema, n_posts, n_comentarios):
+
+async def iniciar_scrapping(tema, n_posts, n_comentarios, id):
     async with async_playwright() as p:
         # Configuramos la emulación móvil
         device = p.devices['Pixel 7']
@@ -206,6 +226,7 @@ async def iniciar_scrapping(tema, n_posts, n_comentarios):
         # Aquí cargarías tu sesión/cookies si ya las tienes
         context, page = await cargar_sesion(browser, device)
 
+        print("--- [Facebook] Extrayendo comentarios ---")
         comentarios = await scraping(page, tema, n_posts, n_comentarios)
 
         tiempo_fin = time.time()
@@ -217,15 +238,24 @@ async def iniciar_scrapping(tema, n_posts, n_comentarios):
         await asyncio.sleep(2)
         await browser.close()
 
-        guardar_comentarios_csv(comentarios, tema, "Facebook")
+        print("--- [Facebook] Guardando comentarios ---")
+        #guardar_comentarios_csv(comentarios, tema, "Facebook")
+        #await guardar_comentarios(comentarios, tema, "Facebook")
+        #print(f"Comentarios: {comentarios}")
+        await guardar_posts(comentarios, tema, "Facebook")
 
-        tiempo_inicio = time.time()
-        resultado = await procesar_sentimientos(comentarios, 20, "Facebook")
-        tiempo_fin = time.time()
-        tiempo_total_modelo = tiempo_fin - tiempo_inicio
+        #tiempo_inicio = time.time()
+        #print("--- [Facebook] Analizando comentarios ---")
+        #resultado = await procesar_sentimientos(comentarios, 20, "Facebook")
+        #tiempo_fin = time.time()
+        #tiempo_total_modelo = tiempo_fin - tiempo_inicio
 
-        guardar_procesados_csv(resultado, tema, "Facebook")
-        guardar_metricas(tiempo_total_scraping, len(comentarios), tiempo_total_modelo, "Facebook")
+        #print("--- [Facebook] Guardando analisis ---")
+        #guardar_procesados_csv(resultado, tema, "Facebook")
+
+        print("--- [Facebook] Guardando metricas ---")
+        #guardar_metricas(tiempo_total_scraping, len(comentarios), tiempo_total_modelo, "Facebook")
+        await metricasbd(id, tiempo_total_scraping, len(comentarios), "Facebook", tema)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,36 @@ import emoji
 import pandas as pd
 import matplotlib.pyplot as plt
 
+
+def parse_llm_response(texto):
+    print(f"Guardando respuesta del llm: {texto}")
+    try:
+        parts = texto.split('|')
+        label = parts[1].lower().strip(" |")
+
+        if 'posit' in label:
+            label = 'Positivo'
+        elif 'negat' in label:
+            label = 'Negativo'
+        else:
+            label = 'Neutro'
+
+        # Validamos que tengamos las 3 partes exactas
+        if len(parts) == 3:
+            return {
+                "comentario": parts[0].strip(),
+                "sentimiento": label,
+                "explicacion": parts[2].strip()
+            }, None
+        else:
+            # Si el LLM se equivocó, podemos intentar recuperar o loguear el error
+            print(f"Error de formato en: {texto}")
+            return None, texto
+    except Exception as e:
+        print(f"Error de formato en: {texto}")
+        return None, texto
+
+
 def limpiar_texto(texto):
     # 1. Convertir a minúsculas
     texto = texto.lower()
@@ -23,6 +53,7 @@ def limpiar_texto(texto):
 
     return texto
 
+
 def guardar_procesados_csv(lista_comentarios, tema, red_social):
     inicio_guardado = time.time()
     red_social = red_social.lower()
@@ -36,13 +67,33 @@ def guardar_procesados_csv(lista_comentarios, tema, red_social):
             writer = csv.writer(file)
             writer.writerow(['Comentario', 'Sentimiento', 'Explicación'])
 
-            writer.writerow([
-                lista_comentarios
-            ])
+            for comentario in lista_comentarios:
+                writer.writerow([
+                    comentario
+                ])
 
         fin_guardado = time.time()
         print(f"[{red_social}] Se guardaron los resultados en {fin_guardado - inicio_guardado:.4f} segundos.")
 
+    except Exception as e:
+        print(f"[{red_social}] Error al escribir el CSV: {e}")
+
+
+def guardar_rechazados(texto):
+    with open("procesados/rechazados.txt", "w", encoding="utf-8") as archivo:
+        for item in texto:
+            archivo.write(f"{item}\n")
+
+def guardar_post_comentarios_csv(posts, procesados, tema, red_social):
+    ruta = f"procesados/{red_social}_post_procesados.csv"
+    try:
+        with open(ruta, mode='w', newline='', encoding='utf-8-sig') as file:
+            writer = csv.writer(file, delimiter='|', quoting=csv.QUOTE_ALL)
+            writer.writerow(['Red Social','Publicacion','Comentario','Sentimiento','Explicacion','Terminos'])
+            red_social = red_social.lower()
+            #Red Social | Publicacion | Comentario | Sentimiento | Explicacion | Terminos
+            for post, procesado in zip(posts, procesados):
+                writer.writerow([red_social, post, procesado['comentario'], procesado['sentimiento'], procesado['explicacion'], tema])
     except Exception as e:
         print(f"[{red_social}] Error al escribir el CSV: {e}")
 

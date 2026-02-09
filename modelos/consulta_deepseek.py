@@ -6,7 +6,7 @@ import json
 # Usamos DeepSeek-V3 por su alta capacidad de seguimiento de instrucciones
 
 # Mantenemos tu estructura de carga de credenciales
-with open("../api_keys_modelos.json", 'r') as f:
+with open("api_keys_modelos.json", 'r') as f:
     creds = json.load(f)
     api_key = creds['huggingface']['api-key']
 
@@ -15,32 +15,80 @@ client = InferenceClient(
     api_key=api_key
 )
 
-async def analizar_comentarios(comentarios_extraidos):
-    print("--- Analizando con deepseek ---")
+async def generar_storytelling(df, tema_query):
+    """Envía un resumen de sentimientos a DeepSeek para obtener una conclusión."""
+    if client is None or df.empty:
+        return "Storytelling no disponible (falta conexión a API o datos)."
 
-    # Prompt base solicitado
-    prompt_instruccion = (
+    print(f"--- Generando storytelling ---")
+
+    resumen = df['sentimiento'].value_counts().to_dict()
+    prompt = f"Analiza estos resultados de sentimiento sobre el tema '{tema_query}': {resumen}. Dame una conclusión breve, analítica y profesional sobre la opinión pública."
+
+    try:
+        response = await client.chat.completions.create(
+            model="deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+
+        resultado = response.choices[0].message.content
+
+        #print(f"Respuesta del modelo:\n{resultado}")
+        print("\n--- Storytelling generado ---")
+        asyncio.sleep(2)
+        return resultado
+    except Exception as e:
+        print(f"Error en el storytelling: {e}")
+        return "La IA no pudo procesar el resumen en este momento."
+
+async def procesar_sentimientos(data, batch_size, red_social, semaphore):
+    resultados_totales = []
+    for i in range(0, len(data), batch_size):
+        batch = data[i:i + batch_size]
+        print(f"[{red_social}] Procesando batch {i//batch_size + 1} de {len(data)//batch_size + 1}...")
+
+        async with semaphore:
+            resultado_batch = await analizar_comentarios(batch, red_social)
+            resultados_totales.append(resultado_batch)
+
+        # Pequeña pausa para evitar bloqueos por Rate Limit de la API gratuita
+            await asyncio.sleep(3)
+    return resultados_totales
+
+async def analizar_comentarios(comentarios, red_social):
+    print(f"--- [{red_social}] Analizando con deepseek-ai/DeepSeek-R1-Distill-Llama-70B ---")
+
+    prompt = (
         "Analiza la siguiente lista de comentarios extraídos de Instagram. "
         "Para cada comentario en la lista, realiza lo siguiente:\n"
         "1. Clasifica el sentimiento como 'Positivo', 'Negativo' o 'Neutro', solo con esas clases.\n"
         "2. Proporciona una explicación breve y técnica de la clasificación.\n\n"
-        "Dame en este formato: Comentario|Sentimiento|Explicación\n\n"
+        "Dame en este formato: comentario|sentimiento|explicacion\n\n"
+        f"Lista de comentarios: {comentarios}"
     )
-
-    # Formateamos la lista de entrada para el modelo
-    cuerpo_comentarios = "\n".join([f"- {c}" for c in comentarios_extraidos])
-    prompt_completo = prompt_instruccion + cuerpo_comentarios
 
     try:
         response = client.chat.completions.create(
             model="deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
-            messages=[{"role": "user", "content": prompt_completo}],
-            temperature=0.2  # Mantenemos baja la temperatura para evitar alucinaciones en la explicación técnica
+            messages=[{"role": "user", "content": prompt}],
         )
 
-        return response.choices[0].message.content
+        resultado = response.choices[0].message.content
+
+        #print(f"Respuesta del modelo:\n{resultado}")
+        print("\n--- Analisis finalizado ---")
+        await asyncio.sleep(2)
+        return resultado
+
     except Exception as e:
-        return f"Error en la API: {e}"
+        print(f"\n[!] Error detectado: {e}")
+        if "429" in str(e):
+            print("Limite de peticiones por minuto alcanzado, esperando 10 segundos")
+            await asyncio.sleep(10)
+        return ""
 
 if __name__ == "__main__":
     # Tu lista de datos

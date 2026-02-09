@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 from openai import AsyncOpenAI
 
 with open("api_keys_modelos.json", 'r') as f:
@@ -15,18 +14,54 @@ client = AsyncOpenAI(
     api_key=api_key,
 )
 
-async def procesar_sentimientos(data, batch_size, red_social):
+
+async def generar_storytelling(df, tema_query):
+    """Envía un resumen de sentimientos a DeepSeek para obtener una conclusión."""
+    if client is None or df.empty:
+        return "Storytelling no disponible (falta conexión a API o datos)."
+
+    print(f"--- Generando storytelling con openai/gpt-oss-120b ---")
+
+    resumen = df['sentimiento'].value_counts().to_dict()
+    prompt = f"Analiza estos resultados de sentimiento sobre el tema '{tema_query}': {resumen}. Dame una conclusión breve, analítica y profesional sobre la opinión pública."
+
+    try:
+        response = await client.chat.completions.create(
+            model="openai/gpt-oss-120b:free",
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+
+        resultado = response.choices[0].message.content
+
+        #print(f"Respuesta del modelo:\n{resultado}")
+        print("\n--- Storytelling generado ---")
+        await asyncio.sleep(2)
+        return resultado
+    except Exception as e:
+        print(f"Error en el storytelling: {e}")
+        return "La IA no pudo procesar el resumen en este momento."
+
+
+async def procesar_sentimientos(data, batch_size, red_social, semaphore):
     resultados_totales = []
+    resultado = ""
     for i in range(0, len(data), batch_size):
         batch = data[i:i + batch_size]
         print(f"[{red_social}] Procesando batch {i//batch_size + 1} de {len(data)//batch_size + 1}...")
 
-        resultado_batch = await analizar_comentarios(batch)
-        resultados_totales.append(resultado_batch)
+        async with semaphore:
+            resultado_batch = await analizar_comentarios(batch, red_social)
+            resultado += resultado_batch
+            #resultados_totales.append(resultado_batch)
 
         # Pequeña pausa para evitar bloqueos por Rate Limit de la API gratuita
-        await asyncio.sleep(1)
-        return resultados_totales
+            await asyncio.sleep(3)
+    resultados_totales = resultado.splitlines()
+    return resultados_totales
+
 
 async def analizar_comentarios(comentarios, red_social):
     print(f"--- [{red_social}] Analizando con openai/gpt-oss-120b ---")
@@ -36,7 +71,7 @@ async def analizar_comentarios(comentarios, red_social):
         "Para cada comentario en la lista, realiza lo siguiente:\n"
         "1. Clasifica el sentimiento como 'Positivo', 'Negativo' o 'Neutro', solo con esas clases.\n"
         "2. Proporciona una explicación breve y técnica de la clasificación.\n\n"
-        "Dame en este formato: Comentario|Sentimiento|Explicación\n\n"
+        "Dame en este formato: comentario|sentimiento|explicacion\n\n"
         f"Lista de comentarios: {comentarios}"
     )
 
@@ -48,15 +83,19 @@ async def analizar_comentarios(comentarios, red_social):
             ]
         )
 
-        # Extraemos el texto de la respuesta
         resultado = response.choices[0].message.content
 
-        print(f"Respuesta del modelo:\n{resultado}")
-        print("\n--- Prueba finalizada con éxito ---")
+        #print(f"Respuesta del modelo:\n{resultado}")
+        print("\n--- Analisis finalizado ---")
+        asyncio.sleep(2)
         return resultado
 
     except Exception as e:
         print(f"\n[!] Error detectado: {e}")
+        if "429" in str(e):
+            print("Limite de peticiones por minuto alcanzado, esperando 10 segundos")
+            await asyncio.sleep(10)
+        return ""
 
 if __name__ == "__main__":
     comentarios_extraidos = [
